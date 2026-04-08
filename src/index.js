@@ -1,81 +1,47 @@
-const { plugin } = require('puppeteer-with-fingerprints');
 const fs = require("fs");
-const config = require('./config');
-const log = require('./Utils/log');
-const recMail = require('./Utils/recMail');
+const config = require("./config");
+const log = require("./Utils/log");
+const recMail = require("./Utils/recMail");
+const { createBrowserSession } = require("./browser/session");
+const { validateRuntimeConfig } = require("./browser/runtime-config");
 
-async function start() {
-  console.clear();
+async function start(deps = {}) {
+  const runtimeConfig = deps.config || config;
+  const validateConfig = deps.validateRuntimeConfig || validateRuntimeConfig;
+  const createSession = deps.createBrowserSession || createBrowserSession;
+  const createAccountFn = deps.createAccount || createAccount;
+  const clearConsole = deps.clearConsole || console.clear;
+
+  validateConfig(runtimeConfig);
+  clearConsole();
 
   log("Starting...", "green");
-
-  log("Fetching Fingerprint...", "yellow");
-  plugin.setServiceKey('');
-  const fingerprint = await plugin.fetch({
-    tags: ['Microsoft Windows', 'Chrome'],
-  });
-
-  log("Applying Fingerprint...", "yellow");
-  plugin.useFingerprint(fingerprint);
-
-  log("Fingerprint fetched and applied", "green");
-
-  if (config.USE_PROXY) {
-    log("Applying proxy settings...", "green");
-    plugin.useProxy(`${config.PROXY_USERNAME}:${config.PROXY_PASSWORD}@${config.PROXY_IP}:${config.PROXY_PORT}`, {
-      detectExternalIP: true,
-      changeGeolocation: true,
-      changeBrowserLanguage: true,
-      changeTimezone: true,
-      changeWebRTC: true,
-    });
-    log("Proxy settings applied", "green");
-  }
-
   log("Launching browser...", "green");
-  const browser = await plugin.launch({
-    headless: false
-  });
-  const page = await browser.newPage();
-  await page.setDefaultTimeout(3600000);
+  const session = createSession(runtimeConfig);
+  await session.launch();
 
-  const viewport = await page.evaluate(() => ({
-    width: document.documentElement.clientWidth,
-    height: document.documentElement.clientHeight,
-  }));
-  log(`Viewport: [Width: ${viewport.width} Height: ${viewport.height}]`, "green");
-
-  // Check if the viewport is bigger than the current resolution.
-  const { getCurrentResolution } = await import("win-screen-resolution");
-  if (viewport.width > getCurrentResolution().width || viewport.height > getCurrentResolution().height) {
-    log("Viewport is bigger than the current resolution, restarting...", "red");
-    await delay(5000);
-    await page.close();
-    await browser.close();
-    start();
+  try {
+    const page = await session.newPage();
+    await createAccountFn(page, runtimeConfig);
+  } finally {
+    await session.close();
   }
-
-  await createAccount(page);
-  await page.close();
-  await browser.close();
-  process.exit(0);
-
 }
 
-async function createAccount(page) {
+async function createAccount(page, runtimeConfig = config) {
   // Going to Outlook register page.
   await page.goto("https://outlook.live.com/owa/?nlp=1&signup=1");
   await page.waitForSelector(SELECTORS.USERNAME_INPUT);
 
   // Generating Random Personal Info.
-  const PersonalInfo = await generatePersonalInfo();
+  const PersonalInfo = await generatePersonalInfo(runtimeConfig);
 
   // Username
   await page.type(SELECTORS.USERNAME_INPUT, PersonalInfo.username);
   await page.keyboard.press("Enter");
 
   // Password
-  const password = await generatePassword();
+  const password = await generatePassword(runtimeConfig);
   await page.waitForSelector(SELECTORS.PASSWORD_INPUT);
   await page.type(SELECTORS.PASSWORD_INPUT, password);
   await page.keyboard.press("Enter");
@@ -121,7 +87,7 @@ async function createAccount(page) {
   }
   await page.waitForSelector(SELECTORS.OUTLOOK_PAGE);
 
-  if (config.ADD_RECOVERY_EMAIL) {
+  if (runtimeConfig.ADD_RECOVERY_EMAIL) {
     log("Adding Recovery Email...", "yellow");
     await page.goto("https://account.live.com/proofs/Manage");
 
@@ -172,7 +138,7 @@ async function createAccount(page) {
     }
   }
 
-  await writeCredentials(email, password);
+  await writeCredentials(email, password, runtimeConfig);
 
 }
 
@@ -186,19 +152,19 @@ async function resendCode(page, recoveryEmail) {
   await page.keyboard.press("Enter");
 }
 
-async function writeCredentials(email, password) {
+async function writeCredentials(email, password, runtimeConfig = config) {
   // Writes account's credentials on "accounts.txt".
   const account = email + ":" + password;
   log(account, "green");
-  fs.appendFile(config.ACCOUNTS_FILE, `\n${account}`, (err) => {
+  fs.appendFile(runtimeConfig.ACCOUNTS_FILE, `\n${account}`, (err) => {
     if (err) {
       log(err, "red");
     }
   });
 }
 
-async function generatePersonalInfo() {
-  const names = fs.readFileSync(config.NAMES_FILE, "utf8").split("\n");
+async function generatePersonalInfo(runtimeConfig = config) {
+  const names = fs.readFileSync(runtimeConfig.NAMES_FILE, "utf8").split("\n");
   const randomFirstName = names[Math.floor(Math.random() * names.length)].trim();
   const randomLastName = names[Math.floor(Math.random() * names.length)].trim();
   const username = randomFirstName + randomLastName + Math.floor(Math.random() * 9999);
@@ -208,8 +174,8 @@ async function generatePersonalInfo() {
   return { username, randomFirstName, randomLastName, birthDay, birthMonth, birthYear };
 }
 
-async function generatePassword() {
-  const words = fs.readFileSync(config.WORDS_FILE, "utf8").split("\n");
+async function generatePassword(runtimeConfig = config) {
+  const words = fs.readFileSync(runtimeConfig.WORDS_FILE, "utf8").split("\n");
   const firstword = words[Math.floor(Math.random() * words.length)].trim();
   const secondword = words[Math.floor(Math.random() * words.length)].trim();
   return firstword + secondword + Math.floor(Math.random() * 9999) + '!';
@@ -243,4 +209,13 @@ function delay(time) {
   return new Promise((resolve) => setTimeout(resolve, time));
 }
 
-start();
+if (require.main === module) {
+  start().catch((error) => {
+    log(error.message, "red");
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  start,
+};
