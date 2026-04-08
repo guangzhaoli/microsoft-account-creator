@@ -1,4 +1,5 @@
 module.exports = {
+    BROWSER_EXECUTABLE_PATH: '',
     ADD_RECOVERY_EMAIL: true,
     USE_PROXY: false,
     PROXY_USERNAME: 'username',
