@@ -10,9 +10,7 @@
     <a href="https://github.com/silvestrodecaro/microsoft-account-creator/blob/master/LICENSE" rel="nofollow"><img src="https://img.shields.io/github/license/silvestrodecaro/microsoft-account-creator.svg?style=for-the-badge" alt="MIT License" data-canonical-src="https://img.shields.io/github/license/silvestrodecaro/microsoft-account-creator.svg?style=for-the-badge" style="max-width: 100%;"></a>
 </p>
 
-This project automates the creation of Microsoft accounts using [puppeteer-with-fingerprints](https://github.com/CheshireCaat/puppeteer-with-fingerprints), a plugin for the [puppeteer](https://github.com/puppeteer/puppeteer) framework. It generates accounts with realistic Italian names, surnames, and passwords, enhancing the authenticity of created accounts.
-
-> Note: The first (and only) time you run the code it will create a folder called “data” containing the entire browser, this will take a few minutes.
+This project automates the creation of Microsoft accounts with [puppeteer](https://github.com/puppeteer/puppeteer) and a real Chromium or Chrome executable supplied by the operator. It generates accounts with realistic Italian names, surnames, and passwords, while keeping browser startup and browser-visible persona under explicit local control.
 
 ## ✨ Key Features
 
@@ -44,7 +42,7 @@ This project automates the creation of Microsoft accounts using [puppeteer-with-
 ### Prerequisites
 
 - Node.js (version 12 or higher)
-- Google Chrome (latest version)
+- A local Chromium or Chrome executable path
 
 ### Installation
 
@@ -63,6 +61,20 @@ npm install
 node .
 ```
 
+Before running, set `BROWSER_EXECUTABLE_PATH` in [`src/config.js`](src/config.js) to the exact Chromium or Chrome executable you want Puppeteer to launch.
+
+Example:
+
+```js
+module.exports = {
+  BROWSER_EXECUTABLE_PATH: "/home/lucas/Downloads/ungoogled-chromium-144.0.7559.132-1-x86_64_linux/chrome",
+  ADD_RECOVERY_EMAIL: true,
+  USE_PROXY: false,
+};
+```
+
+The runtime now fails hard when the browser path is missing, invalid, or not executable. It does not auto-discover browsers and does not fall back to a bundled browser.
+
 ## 🔧 Configuration
 
 ### CAPTCHA
@@ -75,7 +87,10 @@ To use a proxy:
 
 1. Open the [`config.js`](src/config.js#L3) file
 2. Set `USE_PROXY: true`
-3. Edit proxy credentials as needed
+3. Set `PROXY_IP` and `PROXY_PORT`
+4. If your proxy requires authentication, set both `PROXY_USERNAME` and `PROXY_PASSWORD`
+
+> Note: Partial proxy credentials are rejected at startup.
 
 ### Recovery Email
 
@@ -88,7 +103,7 @@ To disable adding a recovery email:
 
 ## ⚠️ Warnings
 
-- Ensure you have the latest version of Google Chrome installed to ensure the best account quality and easier CAPTCHA solving.
+- Ensure the Chromium or Chrome executable in `BROWSER_EXECUTABLE_PATH` is valid and executable before launching the tool.
 - Using this tool may violate Microsoft's Terms of Service. Use at your own risk.
 
 ## 🤝 Contributing
