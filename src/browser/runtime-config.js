@@ -5,7 +5,7 @@ function isBlank(value) {
 }
 
 function isProxyEnabled(config) {
-  return config?.USE_PROXY === true || config?.USE_PROXY === "true";
+  return config?.USE_PROXY === true;
 }
 
 function validateRuntimeConfig(config, deps = {}) {
@@ -16,7 +16,13 @@ function validateRuntimeConfig(config, deps = {}) {
   const accessSync = deps.accessSync ?? fs.accessSync;
   const constants = deps.constants ?? fs.constants;
 
-  accessSync(config.BROWSER_EXECUTABLE_PATH, constants.X_OK);
+  try {
+    accessSync(config.BROWSER_EXECUTABLE_PATH, constants.X_OK);
+  } catch (error) {
+    throw new Error(
+      `BROWSER_EXECUTABLE_PATH is not executable: ${config.BROWSER_EXECUTABLE_PATH}`
+    );
+  }
 
   if (!isProxyEnabled(config)) {
     return config;

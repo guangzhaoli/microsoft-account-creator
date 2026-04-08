@@ -45,6 +45,25 @@ test("partial proxy credentials fail hard", () => {
   );
 });
 
+test("non-executable browser path is reported as a clear config error", () => {
+  assert.throws(
+    () =>
+      validateRuntimeConfig(
+        {
+          BROWSER_EXECUTABLE_PATH: "/tmp/browser",
+          USE_PROXY: false,
+        },
+        {
+          accessSync: () => {
+            throw new Error("EACCES");
+          },
+          constants: { X_OK: 1 },
+        }
+      ),
+    /BROWSER_EXECUTABLE_PATH is not executable: \/tmp\/browser/
+  );
+});
+
 test("valid proxy config returns expected proxy helpers", () => {
   const calls = [];
   const config = {
@@ -75,6 +94,25 @@ test("proxy helpers return null when proxy disabled", () => {
   const config = {
     BROWSER_EXECUTABLE_PATH: "/opt/browser",
     USE_PROXY: false,
+    PROXY_IP: "10.0.0.1",
+    PROXY_PORT: "3128",
+    PROXY_USERNAME: "alice",
+    PROXY_PASSWORD: "secret",
+  };
+
+  validateRuntimeConfig(config, {
+    accessSync: () => {},
+    constants: { X_OK: 1 },
+  });
+
+  assert.equal(buildProxyServerArg(config), null);
+  assert.equal(getProxyCredentials(config), null);
+});
+
+test("proxy helpers only enable proxy when USE_PROXY is the boolean true", () => {
+  const config = {
+    BROWSER_EXECUTABLE_PATH: "/opt/browser",
+    USE_PROXY: "true",
     PROXY_IP: "10.0.0.1",
     PROXY_PORT: "3128",
     PROXY_USERNAME: "alice",
