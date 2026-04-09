@@ -68,7 +68,18 @@ Example:
 ```js
 module.exports = {
   BROWSER_EXECUTABLE_PATH: "/home/lucas/Downloads/ungoogled-chromium-144.0.7559.132-1-x86_64_linux/chrome",
-  ADD_RECOVERY_EMAIL: true,
+  ADD_RECOVERY_EMAIL: false,
+  MANUAL_VERIFICATION: true,
+  ENABLE_OAUTH2: false,
+  OAUTH2_CLIENT_ID: "",
+  OAUTH2_REDIRECT_URL: "",
+  OAUTH2_SCOPES: [
+    "offline_access",
+    "https://graph.microsoft.com/Mail.ReadWrite",
+    "https://graph.microsoft.com/Mail.Send",
+    "https://graph.microsoft.com/User.Read",
+  ],
+  OAUTH_TOKENS_FILE: "oauth_tokens.jsonl",
   USE_PROXY: false,
 };
 ```
@@ -100,6 +111,19 @@ To disable adding a recovery email:
 2. Set `ADD_RECOVERY_EMAIL: false`
 
 > Note: Disabling the recovery email is not recommended.
+
+### OAuth2
+
+To enable Microsoft OAuth2 token capture after registration:
+
+1. Open the [`config.js`](src/config.js) file
+2. Set `ENABLE_OAUTH2: true`
+3. Fill `OAUTH2_CLIENT_ID`
+4. Fill `OAUTH2_REDIRECT_URL`
+5. Adjust `OAUTH2_SCOPES` as needed
+6. Set `OAUTH_TOKENS_FILE` to the output file you want
+
+> Note: When `ENABLE_OAUTH2=true`, startup fails hard if any OAuth2 field is incomplete.
 
 ## ⚠️ Warnings
 

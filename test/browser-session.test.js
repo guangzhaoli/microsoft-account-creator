@@ -1,23 +1,28 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { createBrowserSession } = require("../src/browser/session");
+const {
+  createBrowserSession,
+  buildBrowserSpawnArgs,
+} = require("../src/browser/session");
 
-test("launch uses the configured executable path and launch args", async () => {
+test("buildBrowserSpawnArgs adds the remote debugging and profile flags", () => {
+  assert.deepEqual(buildBrowserSpawnArgs("/tmp/profile", ["--lang=en-US"]), [
+    "--remote-debugging-port=0",
+    "--user-data-dir=/tmp/profile",
+    "--lang=en-US",
+    "about:blank",
+  ]);
+});
+
+test("launch uses the configured executable path and CDP launch args", async () => {
   const launches = [];
-  const fakeBrowser = {
-    newPage: async () => ({
-      setDefaultTimeout() {},
-      evaluateOnNewDocument: async () => {},
-      authenticate: async () => {},
-    }),
-    close: async () => {},
-  };
+  const browserClient = {};
 
   const session = createBrowserSession(
     {
       BROWSER_EXECUTABLE_PATH: "/tmp/chrome",
-      USE_PROXY: false,
+      PROXY_MODE: "none",
     },
     {
       validateRuntimeConfig() {},
@@ -27,12 +32,15 @@ test("launch uses the configured executable path and launch args", async () => {
       }),
       buildLaunchArgs: () => ["--lang=en-US"],
       buildInjectionScript: () => "window.__fp = true;",
-      puppeteer: {
-        launch: async (options) => {
-          launches.push(options);
-          return fakeBrowser;
-        },
+      launchBrowserProcess: async (executablePath, args) => {
+        launches.push({ executablePath, args });
+        return { exitCode: null };
       },
+      waitForDevToolsEndpoint: async () => ({
+        port: 9222,
+        browserWebSocketUrl: "ws://127.0.0.1:9222/devtools/browser/test",
+      }),
+      connectBrowserClient: async () => browserClient,
       fs: {
         promises: {
           mkdtemp: async () => "/tmp/ms-account-browser-123",
@@ -44,37 +52,39 @@ test("launch uses the configured executable path and launch args", async () => {
     }
   );
 
-  await session.launch();
+  const launched = await session.launch();
 
   assert.equal(launches.length, 1);
   assert.equal(launches[0].executablePath, "/tmp/chrome");
-  assert.deepEqual(launches[0].args, ["--lang=en-US"]);
-  assert.equal(launches[0].headless, false);
-  assert.equal(launches[0].userDataDir, "/tmp/ms-account-browser-123");
+  assert.deepEqual(launches[0].args, [
+    "--remote-debugging-port=0",
+    "--user-data-dir=/tmp/ms-account-browser-123",
+    "--lang=en-US",
+    "about:blank",
+  ]);
+  assert.deepEqual(launched, {
+    port: 9222,
+    browserClient,
+  });
 });
 
-test("newPage installs the injection script and proxy auth", async () => {
+test("newPage installs the injection script and proxy auth through the CDP adapter", async () => {
   const calls = [];
   const fakePage = {
     setDefaultTimeout(value) {
       calls.push(["timeout", value]);
     },
-    async evaluateOnNewDocument(script) {
-      calls.push(["script", script]);
-    },
     async authenticate(credentials) {
       calls.push(["auth", credentials]);
     },
+    async close() {},
   };
 
   const session = createBrowserSession(
     {
       BROWSER_EXECUTABLE_PATH: "/tmp/chrome",
-      USE_PROXY: true,
-      PROXY_IP: "127.0.0.1",
-      PROXY_PORT: "8080",
-      PROXY_USERNAME: "user",
-      PROXY_PASSWORD: "pass",
+      PROXY_MODE: "fixed",
+      PROXY: "http://user:pass@127.0.0.1:8080",
     },
     {
       validateRuntimeConfig() {},
@@ -85,11 +95,15 @@ test("newPage installs the injection script and proxy auth", async () => {
       buildLaunchArgs: () => ["--lang=en-US"],
       buildInjectionScript: () => "window.__fp = true;",
       getProxyCredentials: () => ({ username: "user", password: "pass" }),
-      puppeteer: {
-        launch: async () => ({
-          newPage: async () => fakePage,
-          close: async () => {},
-        }),
+      launchBrowserProcess: async () => ({ exitCode: null }),
+      waitForDevToolsEndpoint: async () => ({
+        port: 9222,
+        browserWebSocketUrl: "ws://127.0.0.1:9222/devtools/browser/test",
+      }),
+      connectBrowserClient: async () => ({}),
+      createPageAdapter: async (options) => {
+        calls.push(["adapter", options.injectionScript, options.port]);
+        return fakePage;
       },
       fs: {
         promises: {
@@ -106,19 +120,28 @@ test("newPage installs the injection script and proxy auth", async () => {
   await session.newPage();
 
   assert.deepEqual(calls, [
+    ["adapter", "window.__fp = true;", 9222],
     ["timeout", 3600000],
-    ["script", "window.__fp = true;"],
     ["auth", { username: "user", password: "pass" }],
   ]);
 });
 
-test("close releases the browser and removes the temp profile directory", async () => {
+test("close releases the page, browser client, process and temp profile directory", async () => {
   const closeCalls = [];
+  const fakeBrowserClient = {
+    Browser: {
+      close: async () => closeCalls.push("browser.close"),
+    },
+    close: async () => closeCalls.push("browserClient.close"),
+  };
+  const fakeBrowserProcess = {
+    exitCode: null,
+  };
 
   const session = createBrowserSession(
     {
       BROWSER_EXECUTABLE_PATH: "/tmp/chrome",
-      USE_PROXY: false,
+      PROXY_MODE: "none",
     },
     {
       validateRuntimeConfig() {},
@@ -128,15 +151,18 @@ test("close releases the browser and removes the temp profile directory", async 
       }),
       buildLaunchArgs: () => ["--lang=en-US"],
       buildInjectionScript: () => "window.__fp = true;",
-      puppeteer: {
-        launch: async () => ({
-          newPage: async () => ({
-            setDefaultTimeout() {},
-            evaluateOnNewDocument: async () => {},
-          }),
-          close: async () => closeCalls.push("browser.close"),
-        }),
-      },
+      launchBrowserProcess: async () => fakeBrowserProcess,
+      waitForDevToolsEndpoint: async () => ({
+        port: 9222,
+        browserWebSocketUrl: "ws://127.0.0.1:9222/devtools/browser/test",
+      }),
+      connectBrowserClient: async () => fakeBrowserClient,
+      createPageAdapter: async () => ({
+        setDefaultTimeout() {},
+        authenticate: async () => {},
+        close: async () => closeCalls.push("page.close"),
+      }),
+      terminateBrowserProcess: async () => closeCalls.push("process.terminate"),
       fs: {
         promises: {
           mkdtemp: async () => "/tmp/ms-account-browser-123",
@@ -150,10 +176,14 @@ test("close releases the browser and removes the temp profile directory", async 
   );
 
   await session.launch();
+  await session.newPage();
   await session.close();
 
   assert.deepEqual(closeCalls, [
+    "page.close",
     "browser.close",
+    "browserClient.close",
+    "process.terminate",
     ["rm", "/tmp/ms-account-browser-123", { recursive: true, force: true }],
   ]);
 });

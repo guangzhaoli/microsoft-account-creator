@@ -5,6 +5,8 @@ const {
   validateRuntimeConfig,
   buildProxyServerArg,
   getProxyCredentials,
+  resolveTaskProxy,
+  withResolvedProxy,
 } = require("../src/browser/runtime-config");
 
 test("missing browser executable path fails hard", () => {
@@ -13,7 +15,9 @@ test("missing browser executable path fails hard", () => {
       validateRuntimeConfig(
         {
           BROWSER_EXECUTABLE_PATH: "   ",
-          USE_PROXY: false,
+          COUNTS: 1,
+          WORKERS: 1,
+          PROXY_MODE: "none",
         },
         {
           accessSync: () => {},
@@ -30,18 +34,17 @@ test("partial proxy credentials fail hard", () => {
       validateRuntimeConfig(
         {
           BROWSER_EXECUTABLE_PATH: "/tmp/browser",
-          USE_PROXY: true,
-          PROXY_IP: "127.0.0.1",
-          PROXY_PORT: "8080",
-          PROXY_USERNAME: "user",
-          PROXY_PASSWORD: "",
+          COUNTS: 1,
+          WORKERS: 1,
+          PROXY_MODE: "fixed",
+          PROXY: "http://user@127.0.0.1:8080",
         },
         {
           accessSync: () => {},
           constants: { X_OK: 1 },
         }
       ),
-    /PROXY_USERNAME.*PROXY_PASSWORD|PROXY_PASSWORD.*PROXY_USERNAME/
+    /proxy username and password must both be set together/
   );
 });
 
@@ -51,7 +54,9 @@ test("non-executable browser path is reported as a clear config error", () => {
       validateRuntimeConfig(
         {
           BROWSER_EXECUTABLE_PATH: "/tmp/browser",
-          USE_PROXY: false,
+          COUNTS: 1,
+          WORKERS: 1,
+          PROXY_MODE: "none",
         },
         {
           accessSync: () => {
@@ -68,11 +73,10 @@ test("valid proxy config returns expected proxy helpers", () => {
   const calls = [];
   const config = {
     BROWSER_EXECUTABLE_PATH: "/opt/browser",
-    USE_PROXY: true,
-    PROXY_IP: "10.0.0.1",
-    PROXY_PORT: "3128",
-    PROXY_USERNAME: "alice",
-    PROXY_PASSWORD: "secret",
+    COUNTS: 1,
+    WORKERS: 1,
+    PROXY_MODE: "fixed",
+    PROXY: "http://alice:secret@10.0.0.1:3128",
   };
 
   validateRuntimeConfig(config, {
@@ -93,11 +97,10 @@ test("valid proxy config returns expected proxy helpers", () => {
 test("proxy helpers return null when proxy disabled", () => {
   const config = {
     BROWSER_EXECUTABLE_PATH: "/opt/browser",
-    USE_PROXY: false,
-    PROXY_IP: "10.0.0.1",
-    PROXY_PORT: "3128",
-    PROXY_USERNAME: "alice",
-    PROXY_PASSWORD: "secret",
+    COUNTS: 1,
+    WORKERS: 1,
+    PROXY_MODE: "none",
+    PROXY: "http://alice:secret@10.0.0.1:3128",
   };
 
   validateRuntimeConfig(config, {
@@ -109,14 +112,13 @@ test("proxy helpers return null when proxy disabled", () => {
   assert.equal(getProxyCredentials(config), null);
 });
 
-test("proxy helpers only enable proxy when USE_PROXY is the boolean true", () => {
+test("pool mode resolves a proxy entry and withResolvedProxy freezes it for one attempt", async () => {
   const config = {
     BROWSER_EXECUTABLE_PATH: "/opt/browser",
-    USE_PROXY: "true",
-    PROXY_IP: "10.0.0.1",
-    PROXY_PORT: "3128",
-    PROXY_USERNAME: "alice",
-    PROXY_PASSWORD: "secret",
+    COUNTS: 1,
+    WORKERS: 1,
+    PROXY_MODE: "pool",
+    PROXY_POOL: ["http://pool-a:8080", "socks5://pool-b:1080"],
   };
 
   validateRuntimeConfig(config, {
@@ -124,6 +126,79 @@ test("proxy helpers only enable proxy when USE_PROXY is the boolean true", () =>
     constants: { X_OK: 1 },
   });
 
-  assert.equal(buildProxyServerArg(config), null);
-  assert.equal(getProxyCredentials(config), null);
+  const selected = await resolveTaskProxy(config, {
+    pickProxyPoolEntry: async (entries) => entries[1],
+  });
+  const resolved = withResolvedProxy(config, selected);
+
+  assert.equal(selected, "socks5://pool-b:1080");
+  assert.equal(resolved.PROXY_MODE, "fixed");
+  assert.equal(resolved.PROXY, "socks5://pool-b:1080");
+  assert.deepEqual(resolved.PROXY_POOL, []);
+  assert.equal(resolved.PROXY_POOL_CONFIG_FILE, "");
+});
+
+test("oauth2 config requires client id, redirect url, scopes, and output file when enabled", () => {
+  assert.throws(
+    () =>
+      validateRuntimeConfig(
+        {
+          BROWSER_EXECUTABLE_PATH: "/opt/browser",
+          COUNTS: 1,
+          WORKERS: 1,
+          PROXY_MODE: "none",
+          ENABLE_OAUTH2: true,
+          OAUTH2_CLIENT_ID: "",
+          OAUTH2_REDIRECT_URL: "",
+          OAUTH2_SCOPES: [],
+          OAUTH_TOKENS_FILE: "",
+          OAUTH_TOKENS_TEXT_FILE: "",
+        },
+        {
+          accessSync: () => {},
+          constants: { X_OK: 1 },
+        }
+      ),
+    /OAUTH2_CLIENT_ID|OAUTH2_REDIRECT_URL|OAUTH2_SCOPES|OAUTH_TOKENS_FILE|OAUTH_TOKENS_TEXT_FILE/
+  );
+});
+
+test("counts and workers must be positive integers", () => {
+  assert.throws(
+    () =>
+      validateRuntimeConfig(
+        {
+          BROWSER_EXECUTABLE_PATH: "/opt/browser",
+          PROXY_MODE: "none",
+          COUNTS: 0,
+          WORKERS: "2",
+        },
+        {
+          accessSync: () => {},
+          constants: { X_OK: 1 },
+        }
+      ),
+    /COUNTS|WORKERS/
+  );
+});
+
+test("pool mode requires pool entries or a pool config file", () => {
+  assert.throws(
+    () =>
+      validateRuntimeConfig(
+        {
+          BROWSER_EXECUTABLE_PATH: "/opt/browser",
+          COUNTS: 1,
+          WORKERS: 1,
+          PROXY_MODE: "pool",
+          PROXY_POOL: [],
+          PROXY_POOL_CONFIG_FILE: "",
+        },
+        {
+          accessSync: () => {},
+          constants: { X_OK: 1 },
+        }
+      ),
+    /PROXY_POOL|PROXY_POOL_CONFIG_FILE/
+  );
 });
