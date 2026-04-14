@@ -2,6 +2,10 @@ const fs = require("fs");
 const config = require("./config");
 const log = require("./Utils/log");
 const recMail = require("./Utils/recMail");
+const {
+  ENGLISH_FIRST_NAMES,
+  ENGLISH_LAST_NAMES,
+} = require("./Utils/english-names");
 const { createBrowserSession } = require("./browser/session");
 const {
   validateRuntimeConfig,
@@ -28,9 +32,7 @@ const MODERN_SELECTORS = {
   NEXT_BUTTON: 'button[type="submit"]',
 };
 const VERIFICATION_TEXT = {
-  ACCESSIBLE_CHALLENGE: ["accessible challenge"],
   PLEASE_WAIT: ["please wait"],
-  PRESS_AGAIN: ["press again"],
   PRESS_AND_HOLD: ["press and hold"],
   PROVE_YOURE_HUMAN: ["let's prove you're human"],
   CHALLENGE_COMPLETED: ["challenge completed", "completed, please wait"],
@@ -169,6 +171,8 @@ async function createAccount(page, runtimeConfig = config, deps = {}) {
   const completeOAuth2Fn = deps.completeOAuth2Fn || completeOAuth2;
   const showBrowserWindowFn = deps.showBrowserWindowFn || showBrowserWindow;
   const hideBrowserWindowFn = deps.hideBrowserWindowFn || hideBrowserWindow;
+  const pauseBeforeNextPageFn =
+    deps.pauseBeforeNextPageFn || pauseBeforeNextPage;
   const hideUntilVerification =
     runtimeConfig.HIDE_BROWSER_UNTIL_VERIFICATION === true;
 
@@ -199,6 +203,7 @@ async function createAccount(page, runtimeConfig = config, deps = {}) {
 
     logFn("Submitting email address...", "green");
     await page.type(MODERN_SELECTORS.EMAIL_INPUT, email);
+    await pauseBeforeNextPageFn({ delayFn });
     await page.keyboard.press("Enter");
 
     await waitForSelectorWithPageDiagnostics(page, MODERN_SELECTORS.PASSWORD_INPUT, {
@@ -207,6 +212,7 @@ async function createAccount(page, runtimeConfig = config, deps = {}) {
     });
     logFn("Submitting password...", "green");
     await page.type(MODERN_SELECTORS.PASSWORD_INPUT, password);
+    await pauseBeforeNextPageFn({ delayFn });
     await page.keyboard.press("Enter");
 
     await waitForSelectorWithPageDiagnostics(page, MODERN_SELECTORS.BIRTH_YEAR_INPUT, {
@@ -225,6 +231,7 @@ async function createAccount(page, runtimeConfig = config, deps = {}) {
       Math.max(1, Number.parseInt(PersonalInfo.birthDay, 10) || 1)
     );
     await page.type(MODERN_SELECTORS.BIRTH_YEAR_INPUT, PersonalInfo.birthYear);
+    await pauseBeforeNextPageFn({ delayFn });
     await page.click(MODERN_SELECTORS.NEXT_BUTTON);
 
     await waitForSelectorWithPageDiagnostics(page, MODERN_SELECTORS.FIRST_NAME_INPUT, {
@@ -240,17 +247,20 @@ async function createAccount(page, runtimeConfig = config, deps = {}) {
       MODERN_SELECTORS.LAST_NAME_INPUT,
       PersonalInfo.randomLastName
     );
+    await pauseBeforeNextPageFn({ delayFn });
     await page.click(MODERN_SELECTORS.NEXT_BUTTON);
   } else {
     // Username
     logFn("Submitting username...", "green");
     await page.type(SELECTORS.USERNAME_INPUT, PersonalInfo.username);
+    await pauseBeforeNextPageFn({ delayFn });
     await page.keyboard.press("Enter");
 
     // Password
     await page.waitForSelector(SELECTORS.PASSWORD_INPUT);
     logFn("Submitting password...", "green");
     await page.type(SELECTORS.PASSWORD_INPUT, password);
+    await pauseBeforeNextPageFn({ delayFn });
     await page.keyboard.press("Enter");
 
     // First Name and Last Name
@@ -258,6 +268,7 @@ async function createAccount(page, runtimeConfig = config, deps = {}) {
     logFn("Submitting first and last name...", "green");
     await page.type(SELECTORS.FIRST_NAME_INPUT, PersonalInfo.randomFirstName);
     await page.type(SELECTORS.LAST_NAME_INPUT, PersonalInfo.randomLastName);
+    await pauseBeforeNextPageFn({ delayFn });
     await page.keyboard.press("Enter");
 
     // Birth Date.
@@ -267,6 +278,7 @@ async function createAccount(page, runtimeConfig = config, deps = {}) {
     await page.select(SELECTORS.BIRTH_DAY_INPUT, PersonalInfo.birthDay);
     await page.select(SELECTORS.BIRTH_MONTH_INPUT, PersonalInfo.birthMonth);
     await page.type(SELECTORS.BIRTH_YEAR_INPUT, PersonalInfo.birthYear);
+    await pauseBeforeNextPageFn({ delayFn });
     await page.keyboard.press("Enter");
     email = await page.$eval(SELECTORS.EMAIL_DISPLAY, el => el.textContent);
   }
@@ -303,6 +315,7 @@ async function createAccount(page, runtimeConfig = config, deps = {}) {
       timeout: 10000,
       delayFn,
     });
+    await pauseBeforeNextPageFn({ delayFn });
     await page.click(SELECTORS.DECLINE_BUTTON);
   } catch (error) {
     logFn("DECLINE_BUTTON not found within 10 seconds, checking for POST_REDIRECT_FORM...", "yellow");
@@ -318,6 +331,7 @@ async function createAccount(page, runtimeConfig = config, deps = {}) {
         delayFn,
       });
       logFn("CLOSE_BUTTON found, clicking...", "green");
+      await pauseBeforeNextPageFn({ delayFn });
       await page.click(SELECTORS.CLOSE_BUTTON);
     } else {
       logFn("Neither DECLINE_BUTTON nor POST_REDIRECT_FORM found.", "red");
@@ -455,54 +469,10 @@ async function handleModernVerification(page, deps = {}) {
     return;
   }
 
-  logFn(
-    "Accessible challenge detected, opening alternative verification...",
-    "yellow"
-  );
-  await activateChallengeAction(page, VERIFICATION_TEXT.ACCESSIBLE_CHALLENGE, {
+  await solvePressAndHoldChallenge(page, {
     delayFn,
     timeout: 30000,
     logFn,
-    description: "Accessible challenge",
-    successCheckFn: async () => {
-      const states = await listChallengeFrameStates(page);
-      const pressAgainAction = await findChallengeActionHandle(
-        page,
-        VERIFICATION_TEXT.PRESS_AGAIN
-      );
-      return states.some(
-        (state) =>
-          includesAny(state.bodyText, VERIFICATION_TEXT.PLEASE_WAIT) ||
-          !state.hasAccessibleChallenge
-      ) || Boolean(pressAgainAction);
-    },
-  });
-
-  logFn("Waiting for Please wait to finish...", "yellow");
-  await waitForModernChallengeReadyForPressAgain(page, {
-    delayFn,
-    timeout: 60000,
-  });
-
-  logFn("Please wait finished, pressing challenge again...", "yellow");
-  await activateChallengeAction(page, VERIFICATION_TEXT.PRESS_AGAIN, {
-    delayFn,
-    timeout: 30000,
-    logFn,
-    description: "Press again",
-    successCheckFn: async () => {
-      const action = await findChallengeActionHandle(
-        page,
-        VERIFICATION_TEXT.PRESS_AGAIN
-      );
-      const states = await listChallengeFrameStates(page);
-      return (
-        !action ||
-        states.some((state) =>
-          includesAny(state.bodyText, VERIFICATION_TEXT.CHALLENGE_COMPLETED)
-        )
-      );
-    },
   });
 
   logFn("Waiting for verification challenge to complete...", "yellow");
@@ -513,6 +483,8 @@ async function handleModernVerification(page, deps = {}) {
 async function handlePostVerificationPages(page, deps = {}) {
   const logFn = deps.logFn || log;
   const delayFn = deps.delayFn || delay;
+  const pauseBeforeNextPageFn =
+    deps.pauseBeforeNextPageFn || pauseBeforeNextPage;
   const deadline = Date.now() + 120000;
 
   while (Date.now() < deadline) {
@@ -521,7 +493,10 @@ async function handlePostVerificationPages(page, deps = {}) {
 
     if (includesAny(mainState.bodyText, ["stay signed in"])) {
       logFn("Stay signed in prompt detected, choosing No...", "yellow");
-      const clicked = await clickPageActionByText(page, ["no"]);
+      const clicked = await clickPageActionByText(page, ["no"], {
+        beforeClickFn: pauseBeforeNextPageFn,
+        delayFn,
+      });
       if (!clicked) {
         const buttons = await listCurrentPageButtons(page);
         const candidates = await listCurrentPageTextCandidates(page, [
@@ -558,10 +533,22 @@ async function handlePostVerificationPages(page, deps = {}) {
         continue;
       }
       const clicked =
-        (await clickPageActionByText(page, ["accept"])) ||
-        (await clickPageActionByText(page, ["ok"])) ||
-        (await clickPageActionByText(page, ["continue"])) ||
-        (await clickPageActionByText(page, ["next"]));
+        (await clickPageActionByText(page, ["accept"], {
+          beforeClickFn: pauseBeforeNextPageFn,
+          delayFn,
+        })) ||
+        (await clickPageActionByText(page, ["ok"], {
+          beforeClickFn: pauseBeforeNextPageFn,
+          delayFn,
+        })) ||
+        (await clickPageActionByText(page, ["continue"], {
+          beforeClickFn: pauseBeforeNextPageFn,
+          delayFn,
+        })) ||
+        (await clickPageActionByText(page, ["next"], {
+          beforeClickFn: pauseBeforeNextPageFn,
+          delayFn,
+        }));
 
       if (!clicked) {
         const buttons = await listCurrentPageButtons(page);
@@ -589,6 +576,8 @@ async function handlePostVerificationPages(page, deps = {}) {
 async function handlePostInboxOnboardingPages(page, deps = {}) {
   const logFn = deps.logFn || log;
   const delayFn = deps.delayFn || delay;
+  const pauseBeforeNextPageFn =
+    deps.pauseBeforeNextPageFn || pauseBeforeNextPage;
   const deadline = Date.now() + 60000;
 
   while (Date.now() < deadline) {
@@ -607,6 +596,7 @@ async function handlePostInboxOnboardingPages(page, deps = {}) {
 
     if (currentUrl.includes("account.microsoft.com/account-checkup")) {
       logFn("Account checkup detected, jumping to cancelled landing page...", "yellow");
+      await pauseBeforeNextPageFn({ delayFn });
       await page.goto(ACCOUNT_CHECKUP_CANCEL_URL, {
         waitUntil: "domcontentloaded",
         timeout: 30000,
@@ -616,8 +606,14 @@ async function handlePostInboxOnboardingPages(page, deps = {}) {
     }
 
     const closeClicked =
-      (await clickPageSelector(page, [SELECTORS.CLOSE_BUTTON])) ||
-      (await clickPageActionByText(page, ["close"]));
+      (await clickPageSelector(page, [SELECTORS.CLOSE_BUTTON], {
+        beforeClickFn: pauseBeforeNextPageFn,
+        delayFn,
+      })) ||
+      (await clickPageActionByText(page, ["close"], {
+        beforeClickFn: pauseBeforeNextPageFn,
+        delayFn,
+      }));
 
     if (closeClicked) {
       logFn("Post-login onboarding detected, closing it...", "yellow");
@@ -643,7 +639,6 @@ async function waitForModernChallenge(page, options = {}) {
     const states = await listChallengeFrameStates(page);
     return states.some(
       (state) =>
-        state.hasAccessibleChallenge ||
         state.hasPressAndHoldButton ||
         includesAny(state.bodyText, VERIFICATION_TEXT.PRESS_AND_HOLD)
     );
@@ -655,30 +650,9 @@ async function waitForModernChallenge(page, options = {}) {
   });
 }
 
-async function waitForModernChallengeReadyForPressAgain(page, options = {}) {
-  const delayFn = options.delayFn || delay;
-  const timeout = options.timeout || 60000;
-
-  await waitForAsyncCondition(async () => {
-    const states = await listChallengeFrameStates(page);
-    if (states.some((state) => includesAny(state.bodyText, VERIFICATION_TEXT.PLEASE_WAIT))) {
-      return false;
-    }
-
-    const action = await findChallengeActionHandle(page, VERIFICATION_TEXT.PRESS_AGAIN);
-    return Boolean(action);
-  }, {
-    delayFn,
-    timeout,
-    description: "press again prompt",
-    onTimeout: () => buildVerificationStateError(page),
-  });
-}
-
 async function waitForModernChallengeToComplete(page, options = {}) {
   const delayFn = options.delayFn || delay;
   const timeout = options.timeout || 60000;
-  const logFn = options.logFn || log;
   const deadline = Date.now() + timeout;
 
   while (Date.now() < deadline) {
@@ -687,14 +661,16 @@ async function waitForModernChallengeToComplete(page, options = {}) {
 
     const challengeFramesStillActive = states.some(
       (state) =>
-        state.hasAccessibleChallenge ||
         state.hasPressAndHoldButton ||
-        includesAny(state.bodyText, VERIFICATION_TEXT.PRESS_AGAIN) ||
-        includesAny(state.bodyText, VERIFICATION_TEXT.PLEASE_WAIT)
+        includesAny(state.bodyText, VERIFICATION_TEXT.PRESS_AND_HOLD) ||
+        includesAny(state.bodyText, VERIFICATION_TEXT.PLEASE_WAIT) ||
+        includesAny(state.bodyText, VERIFICATION_TEXT.CHALLENGE_COMPLETED)
     );
     const challengePageStillActive =
       includesAny(mainState.title, VERIFICATION_TEXT.PROVE_YOURE_HUMAN) ||
-      includesAny(mainState.bodyText, VERIFICATION_TEXT.PRESS_AND_HOLD);
+      includesAny(mainState.bodyText, VERIFICATION_TEXT.PRESS_AND_HOLD) ||
+      includesAny(mainState.bodyText, VERIFICATION_TEXT.PLEASE_WAIT) ||
+      includesAny(mainState.bodyText, VERIFICATION_TEXT.CHALLENGE_COMPLETED);
     const completionPending = states.some((state) =>
       includesAny(state.bodyText, VERIFICATION_TEXT.CHALLENGE_COMPLETED)
     );
@@ -705,42 +681,6 @@ async function waitForModernChallengeToComplete(page, options = {}) {
 
     if (completionPending) {
       await delayFn(1000);
-      continue;
-    }
-
-    const pressAgainAction = await findChallengeActionHandle(
-      page,
-      VERIFICATION_TEXT.PRESS_AGAIN
-    );
-    if (pressAgainAction) {
-      logFn(
-        "Verification challenge still active, retrying Press again...",
-        "yellow"
-      );
-      await activateChallengeAction(page, VERIFICATION_TEXT.PRESS_AGAIN, {
-        delayFn,
-        timeout: 5000,
-        logFn,
-        description: "Press again",
-        successCheckFn: async () => {
-          const action = await findChallengeActionHandle(
-            page,
-            VERIFICATION_TEXT.PRESS_AGAIN
-          );
-          const holdAction = await findChallengeActionHandle(
-            page,
-            VERIFICATION_TEXT.PRESS_AND_HOLD
-          );
-          const currentStates = await listChallengeFrameStates(page);
-          return (
-            !action ||
-            Boolean(holdAction) ||
-            currentStates.some((state) =>
-              includesAny(state.bodyText, VERIFICATION_TEXT.CHALLENGE_COMPLETED)
-            )
-          );
-        },
-      });
       continue;
     }
 
@@ -760,9 +700,7 @@ async function waitForManualModernVerificationCompletion(page, options = {}) {
 
     const challengeFramesStillActive = states.some(
       (state) =>
-        state.hasAccessibleChallenge ||
         state.hasPressAndHoldButton ||
-        includesAny(state.bodyText, VERIFICATION_TEXT.PRESS_AGAIN) ||
         includesAny(state.bodyText, VERIFICATION_TEXT.PLEASE_WAIT) ||
         includesAny(state.bodyText, VERIFICATION_TEXT.PRESS_AND_HOLD) ||
         includesAny(state.bodyText, VERIFICATION_TEXT.CHALLENGE_COMPLETED)
@@ -771,7 +709,7 @@ async function waitForManualModernVerificationCompletion(page, options = {}) {
       includesAny(mainState.title, VERIFICATION_TEXT.PROVE_YOURE_HUMAN) ||
       includesAny(mainState.bodyText, VERIFICATION_TEXT.PRESS_AND_HOLD) ||
       includesAny(mainState.bodyText, VERIFICATION_TEXT.PLEASE_WAIT) ||
-      includesAny(mainState.bodyText, VERIFICATION_TEXT.PRESS_AGAIN);
+      includesAny(mainState.bodyText, VERIFICATION_TEXT.CHALLENGE_COMPLETED);
 
     return !challengeFramesStillActive && !challengePageStillActive;
   }, {
@@ -782,43 +720,7 @@ async function waitForManualModernVerificationCompletion(page, options = {}) {
   });
 }
 
-async function activateChallengeAction(page, matchers, options = {}) {
-  const delayFn = options.delayFn || delay;
-  const timeout = options.timeout || 30000;
-  const successCheckFn = options.successCheckFn;
-  const logFn = options.logFn || log;
-  const description = options.description || matchers.join(" / ");
-
-  const deadline = Date.now() + timeout;
-  while (Date.now() < deadline) {
-    const action = await findChallengeActionHandle(page, matchers);
-    if (!action) {
-      await delayFn(250);
-      continue;
-    }
-
-    const advanced = await tryChallengeActivationMethods(
-      action.handle,
-      page,
-      successCheckFn,
-      {
-        delayFn,
-        logFn,
-        description,
-      }
-    );
-
-    if (advanced) {
-      return;
-    }
-
-    await delayFn(250);
-  }
-
-  throw await buildVerificationStateError(page);
-}
-
-async function solvePressAndHoldChallengeIfPresent(page, options = {}) {
+async function solvePressAndHoldChallenge(page, options = {}) {
   const delayFn = options.delayFn || delay;
   const timeout = options.timeout || 10000;
   const logFn = options.logFn || log;
@@ -832,145 +734,56 @@ async function solvePressAndHoldChallengeIfPresent(page, options = {}) {
   );
 
   if (!holdAction) {
-    return;
+    throw await buildVerificationStateError(page);
   }
 
-  logFn("Press and hold challenge detected, attempting hold...", "yellow");
-  const methods = [
-    {
-      label: "hold Space",
-      run: async () => {
-        await focusChallengeHandle(holdAction.handle);
-        await page.keyboard.down("Space");
-        await delayFn(10000);
-        await page.keyboard.up("Space");
-      },
-    },
-    {
-      label: "hold Enter",
-      run: async () => {
-        await focusChallengeHandle(holdAction.handle);
-        await page.keyboard.down("Enter");
-        await delayFn(10000);
-        await page.keyboard.up("Enter");
-      },
-    },
-    {
-      label: "mouse hold",
-      run: async () => {
-        if (!page.mouse) {
-          throw new Error("mouse unavailable");
-        }
-        const point = await getChallengeActionPoint(holdAction);
-        await page.mouse.move(point.x, point.y);
-        await page.mouse.down();
-        await delayFn(10000);
-        await page.mouse.up();
-      },
-    },
-  ];
+  if (!page.mouse) {
+    throw new Error("Press and hold challenge requires mouse support");
+  }
 
-  for (const method of methods) {
-    try {
-      logFn(`Trying press and hold via ${method.label}...`, "yellow");
-      await method.run();
-      await delayFn(1000);
-      const holdStillPresent = await findChallengeActionHandle(
-        page,
-        VERIFICATION_TEXT.PRESS_AND_HOLD
-      );
-      if (!holdStillPresent) {
-        return;
+  logFn("Press and hold challenge detected, holding with mouse...", "yellow");
+  const point = await getChallengeActionPoint(holdAction);
+  await page.mouse.move(point.x, point.y);
+
+  let transitioned = false;
+  await page.mouse.down();
+  try {
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+      const states = await listChallengeFrameStates(page);
+      const mainState = await readCurrentPageState(page);
+      const holdStillPresent =
+        states.some(
+          (state) =>
+            state.hasPressAndHoldButton ||
+            includesAny(state.bodyText, VERIFICATION_TEXT.PRESS_AND_HOLD)
+        ) ||
+        includesAny(mainState.bodyText, VERIFICATION_TEXT.PRESS_AND_HOLD);
+      const transitionedToCompletion =
+        states.some(
+          (state) =>
+            includesAny(state.bodyText, VERIFICATION_TEXT.PLEASE_WAIT) ||
+            includesAny(state.bodyText, VERIFICATION_TEXT.CHALLENGE_COMPLETED)
+        ) ||
+        includesAny(mainState.bodyText, VERIFICATION_TEXT.PLEASE_WAIT) ||
+        includesAny(mainState.bodyText, VERIFICATION_TEXT.CHALLENGE_COMPLETED);
+
+      if (transitionedToCompletion || !holdStillPresent) {
+        transitioned = true;
+        break;
       }
-    } catch (error) {}
-  }
-}
 
-async function tryChallengeActivationMethods(
-  handle,
-  page,
-  successCheckFn,
-  options = {}
-) {
-  const delayFn = options.delayFn || delay;
-  const logFn = options.logFn || log;
-  const description = options.description || "challenge action";
-  const methods = [
-    {
-      label: "click",
-      run: async () => {
-        await handle.click({ delay: 100 });
-      },
-    },
-    {
-      label: "press Enter",
-      run: async () => {
-        await focusChallengeHandle(handle);
-        if (typeof handle.press === "function") {
-          await handle.press("Enter");
-        } else {
-          await page.keyboard.press("Enter");
-        }
-      },
-    },
-    {
-      label: "press Space",
-      run: async () => {
-        await focusChallengeHandle(handle);
-        if (typeof handle.press === "function") {
-          await handle.press("Space");
-        } else {
-          await page.keyboard.press("Space");
-        }
-      },
-    },
-    {
-      label: "hover then click",
-      run: async () => {
-        if (typeof handle.hover === "function") {
-          await handle.hover();
-        }
-        await handle.click({ delay: 100 });
-      },
-    },
-    {
-      label: "mouse center click",
-      run: async () => {
-        if (!page.mouse || typeof handle.boundingBox !== "function") {
-          throw new Error("mouse click unavailable");
-        }
-
-        const box = await handle.boundingBox();
-        if (!box) {
-          throw new Error("challenge handle has no bounding box");
-        }
-
-        await page.mouse.click(
-          box.x + box.width / 2,
-          box.y + box.height / 2
-        );
-      },
-    },
-  ];
-
-  for (const method of methods) {
-    try {
-      logFn(`Trying ${description} via ${method.label}...`, "yellow");
-      await method.run();
-      await delayFn(1000);
-      if (await successCheckFn()) {
-        return true;
-      }
-    } catch (error) {}
+      await delayFn(200);
+    }
+  } finally {
+    await page.mouse.up();
   }
 
-  return false;
-}
-
-async function focusChallengeHandle(handle) {
-  if (typeof handle.focus === "function") {
-    await handle.focus();
+  if (!transitioned) {
+    throw await buildVerificationStateError(page);
   }
+
+  await delayFn(500);
 }
 
 async function getChallengeHandlePoint(handle) {
@@ -992,23 +805,7 @@ async function getChallengeHandlePoint(handle) {
 }
 
 async function getChallengeActionPoint(action) {
-  try {
-    return await getChallengeHandlePoint(action.handle);
-  } catch (error) {}
-
-  const localPoint = await action.handle.evaluate((element) => {
-    const rect = element.getBoundingClientRect();
-    return {
-      x: rect.left + rect.width / 2,
-      y: rect.top + rect.height / 2,
-    };
-  });
-  const frameOffset = await getFrameViewportOffset(action.frame);
-
-  return {
-    x: frameOffset.x + localPoint.x,
-    y: frameOffset.y + localPoint.y,
-  };
+  return getChallengeHandlePoint(action.handle);
 }
 
 async function getFrameViewportOffset(frame) {
@@ -1047,7 +844,14 @@ async function getFrameViewportOffset(frame) {
 }
 
 async function findChallengeActionHandle(page, matchers) {
+  const currentPageUrl = typeof page.url === "function" ? page.url() : "";
+
   for (const frame of page.frames()) {
+    const frameUrl = typeof frame.url === "function" ? frame.url() : "";
+    if (frameUrl === currentPageUrl) {
+      continue;
+    }
+
     const handle = await findChallengeActionHandleInFrame(frame, matchers);
     if (handle) {
       return { frame, handle };
@@ -1083,9 +887,10 @@ async function findChallengeActionHandleInFrame(frame, matchers) {
   if (exactAriaLabel && typeof frame.$ === "function") {
     try {
       const handle = await frame.$(`[aria-label="${exactAriaLabel}"]`);
-      if (handle) {
+      if (await isUsableChallengeHandle(handle)) {
         return handle;
       }
+      await disposeChallengeHandle(handle);
     } catch (error) {}
   }
 
@@ -1102,6 +907,18 @@ async function findChallengeActionHandleInFrame(frame, matchers) {
         );
         return (
           candidates.find((candidate) => {
+            const rect = candidate.getBoundingClientRect();
+            const computedStyle = window.getComputedStyle(candidate);
+            if (
+              rect.width < 2 ||
+              rect.height < 2 ||
+              computedStyle.display === "none" ||
+              computedStyle.visibility === "hidden" ||
+              computedStyle.pointerEvents === "none"
+            ) {
+              return false;
+            }
+
             const searchableText = [
               candidate.innerText,
               candidate.textContent,
@@ -1129,9 +946,10 @@ async function findChallengeActionHandleInFrame(frame, matchers) {
       if (jsHandle) {
         const handle =
           typeof jsHandle.asElement === "function" ? jsHandle.asElement() : null;
-        if (handle) {
+        if (await isUsableChallengeHandle(handle)) {
           return handle;
         }
+        await disposeChallengeHandle(handle);
         if (typeof jsHandle.dispose === "function") {
           await jsHandle.dispose();
         }
@@ -1142,8 +960,11 @@ async function findChallengeActionHandleInFrame(frame, matchers) {
   if (typeof frame.$x === "function") {
     try {
       const handles = await frame.$x(buildChallengeActionXPath(matchers));
-      if (handles.length > 0) {
-        return handles[0];
+      for (const handle of handles) {
+        if (await isUsableChallengeHandle(handle)) {
+          return handle;
+        }
+        await disposeChallengeHandle(handle);
       }
     } catch (error) {}
   }
@@ -1151,26 +972,56 @@ async function findChallengeActionHandleInFrame(frame, matchers) {
   return null;
 }
 
-function getExactChallengeAriaLabel(matchers) {
-  if (
-    matchers.length === 1 &&
-    matchers[0].trim().toLowerCase() === "accessible challenge"
-  ) {
-    return "Accessible challenge";
+async function isUsableChallengeHandle(handle) {
+  if (!handle) {
+    return false;
   }
 
+  if (typeof handle.clickablePoint === "function") {
+    try {
+      const point = await handle.clickablePoint();
+      if (
+        point &&
+        Number.isFinite(point.x) &&
+        Number.isFinite(point.y)
+      ) {
+        return true;
+      }
+    } catch (error) {}
+  }
+
+  if (typeof handle.boundingBox === "function") {
+    try {
+      const box = await handle.boundingBox();
+      if (
+        box &&
+        Number.isFinite(box.x) &&
+        Number.isFinite(box.y) &&
+        box.width >= 2 &&
+        box.height >= 2
+      ) {
+        return true;
+      }
+    } catch (error) {}
+  }
+
+  return false;
+}
+
+async function disposeChallengeHandle(handle) {
+  if (handle && typeof handle.dispose === "function") {
+    try {
+      await handle.dispose();
+    } catch (error) {}
+  }
+}
+
+function getExactChallengeAriaLabel(matchers) {
   if (
     matchers.length === 1 &&
     matchers[0].trim().toLowerCase() === "press and hold"
   ) {
     return "Press & Hold Human Challenge";
-  }
-
-  if (
-    matchers.length === 1 &&
-    matchers[0].trim().toLowerCase() === "press again"
-  ) {
-    return "Press again";
   }
 
   return null;
@@ -1192,9 +1043,6 @@ async function listChallengeFrameStates(page) {
         return {
           title: normalizeDocumentText(document.title || ""),
           bodyText,
-          hasAccessibleChallenge: Boolean(
-            document.querySelector('[aria-label="Accessible challenge"]')
-          ),
           hasPressAndHoldButton: Boolean(
             document.querySelector('[aria-label="Press & Hold Human Challenge"]')
           ),
@@ -1366,9 +1214,9 @@ async function listFrameTextCandidates(frame, labels) {
   }
 }
 
-async function clickPageActionByText(page, labels) {
+async function clickPageActionByText(page, labels, options = {}) {
   for (const frame of getPageFrames(page)) {
-    const clicked = await clickFrameActionByText(frame, labels);
+    const clicked = await clickFrameActionByText(frame, labels, options);
     if (clicked) {
       return clicked;
     }
@@ -1377,7 +1225,9 @@ async function clickPageActionByText(page, labels) {
   return null;
 }
 
-async function clickPageSelector(page, selectors) {
+async function clickPageSelector(page, selectors, options = {}) {
+  const beforeClickFn = options.beforeClickFn;
+  const delayFn = options.delayFn || delay;
   for (const frame of getPageFrames(page)) {
     for (const selector of selectors) {
       try {
@@ -1387,6 +1237,9 @@ async function clickPageSelector(page, selectors) {
         const handle = await frame.$(selector);
         if (!handle) {
           continue;
+        }
+        if (typeof beforeClickFn === "function") {
+          await beforeClickFn({ delayFn });
         }
         await handle.click({ delay: 100 });
         return selector;
@@ -1405,7 +1258,9 @@ function getPageFrames(page) {
   return [page];
 }
 
-async function clickFrameActionByText(frame, labels) {
+async function clickFrameActionByText(frame, labels, options = {}) {
+  const beforeClickFn = options.beforeClickFn;
+  const delayFn = options.delayFn || delay;
   try {
     if (typeof frame.$$ !== "function") {
       return null;
@@ -1436,6 +1291,9 @@ async function clickFrameActionByText(frame, labels) {
         continue;
       }
 
+      if (typeof beforeClickFn === "function") {
+        await beforeClickFn({ delayFn });
+      }
       await handle.click({ delay: 100 });
       return text;
     }
@@ -1659,17 +1517,14 @@ async function buildVerificationStateError(page) {
   const frameSummary = challengeStates
     .filter(
       (state) =>
-        state.hasAccessibleChallenge ||
         state.hasPressAndHoldButton ||
         includesAny(state.bodyText, VERIFICATION_TEXT.PRESS_AND_HOLD) ||
-        includesAny(state.bodyText, VERIFICATION_TEXT.PLEASE_WAIT) ||
-        includesAny(state.bodyText, VERIFICATION_TEXT.PRESS_AGAIN)
+        includesAny(state.bodyText, VERIFICATION_TEXT.PLEASE_WAIT)
     )
     .map((state) => ({
       url: state.url,
       title: state.title,
       bodyText: state.bodyText.slice(0, 200),
-      hasAccessibleChallenge: state.hasAccessibleChallenge,
       hasPressAndHoldButton: state.hasPressAndHoldButton,
     }));
 
@@ -1693,14 +1548,39 @@ async function writeCredentials(email, password, runtimeConfig = config) {
 }
 
 async function generatePersonalInfo(runtimeConfig = config) {
-  const names = fs.readFileSync(runtimeConfig.NAMES_FILE, "utf8").split("\n");
-  const randomFirstName = names[Math.floor(Math.random() * names.length)].trim();
-  const randomLastName = names[Math.floor(Math.random() * names.length)].trim();
-  const username = randomFirstName + randomLastName + Math.floor(Math.random() * 9999);
+  const randomFirstName = pickRandomEnglishName(ENGLISH_FIRST_NAMES);
+  const randomLastName = pickRandomEnglishName(ENGLISH_LAST_NAMES);
+  const username = buildEmailPrefix(randomFirstName, randomLastName);
   const birthDay = (Math.floor(Math.random() * 28) + 1).toString()
   const birthMonth = (Math.floor(Math.random() * 12) + 1).toString()
   const birthYear = (Math.floor(Math.random() * 10) + 1990).toString()
   return { username, randomFirstName, randomLastName, birthDay, birthMonth, birthYear };
+}
+
+function pickRandomEnglishName(pool) {
+  return String(pool[Math.floor(Math.random() * pool.length)] || "").trim();
+}
+
+function buildEmailPrefix(firstName, lastName) {
+  const normalizedFirstName = normalizeEmailNamePart(firstName);
+  const normalizedLastName = normalizeEmailNamePart(lastName);
+  const digitLength = 4 + Math.floor(Math.random() * 4);
+  const digitString = buildRandomDigitString(digitLength);
+  return `${normalizedFirstName}${normalizedLastName}${digitString}`;
+}
+
+function normalizeEmailNamePart(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z]/g, "");
+}
+
+function buildRandomDigitString(length) {
+  let output = "";
+  for (let index = 0; index < length; index += 1) {
+    output += Math.floor(Math.random() * 10).toString();
+  }
+  return output;
 }
 
 async function generatePassword(runtimeConfig = config) {
@@ -1738,6 +1618,12 @@ const XPATH_LOWERCASE = "abcdefghijklmnopqrstuvwxyz";
 
 function delay(time) {
   return new Promise((resolve) => setTimeout(resolve, time));
+}
+
+async function pauseBeforeNextPage(options = {}) {
+  const delayFn = options.delayFn || delay;
+  const durationMs = 600 + Math.floor(Math.random() * 401);
+  await delayFn(durationMs);
 }
 
 async function hideBrowserWindow(page) {

@@ -6,23 +6,15 @@ const {
   buildLaunchArgs,
   buildInjectionScript,
   normalizeCurlProxyUrl,
+  resolveSystemLinuxPlatformVersion,
+  resolveRandomScreen,
 } = require("../src/browser/fingerprint");
 
 test("launch args include the required anti-automation and locale settings", () => {
   const profile = {
-    seed: 424242,
-    platform: "macos",
-    platformVersion: "15.2.0",
-    brand: "Chrome",
-    brandVersion: "144.0.7559.132",
     language: "en-US",
     acceptLanguage: "en-US,en",
-    timezone: "Asia/Hong_Kong",
-    hardwareConcurrency: 8,
-    disableNonProxiedUDP: true,
-    disableSpoofing: [],
     screen: { width: 1512, height: 982 },
-    webgl: { vendor: "Apple Inc.", renderer: "Apple M4" },
   };
   const args = buildLaunchArgs(profile, { PROXY_MODE: "none" });
 
@@ -36,36 +28,21 @@ test("launch args include the required anti-automation and locale settings", () 
   );
   assert.ok(args.includes("--lang=en-US"));
   assert.ok(args.includes("--accept-lang=en-US,en"));
-  assert.ok(args.includes("--timezone=Asia/Hong_Kong"));
-  assert.ok(args.includes("--fingerprint=424242"));
-  assert.ok(args.includes("--fingerprint-platform=macos"));
-  assert.ok(args.includes("--fingerprint-platform-version=15.2.0"));
-  assert.ok(args.includes("--fingerprint-brand=Chrome"));
-  assert.ok(args.includes("--fingerprint-brand-version=144.0.7559.132"));
-  assert.ok(args.includes("--fingerprint-hardware-concurrency=8"));
-  assert.ok(args.includes("--disable-non-proxied-udp"));
   assert.ok(
     args.includes(`--window-size=${profile.screen.width},${profile.screen.height}`)
   );
   assert.ok(args.includes("--no-first-run"));
   assert.ok(args.includes("--no-default-browser-check"));
+  assert.ok(!args.some((arg) => arg.startsWith("--fingerprint")));
+  assert.ok(!args.some((arg) => arg.startsWith("--timezone=")));
+  assert.ok(!args.some((arg) => arg.startsWith("--disable-spoofing=")));
 });
 
 test("launch args include proxy-server when proxy is enabled", () => {
   const profile = {
-    seed: 424242,
-    platform: "macos",
-    platformVersion: "15.2.0",
-    brand: "Chrome",
-    brandVersion: "144.0.7559.132",
     language: "en-US",
     acceptLanguage: "en-US,en",
-    timezone: "Asia/Hong_Kong",
-    hardwareConcurrency: 8,
-    disableNonProxiedUDP: true,
-    disableSpoofing: ["gpu", "font"],
     screen: { width: 1512, height: 982 },
-    webgl: { vendor: "Apple Inc.", renderer: "Apple M4" },
   };
   const args = buildLaunchArgs(profile, {
     PROXY_MODE: "fixed",
@@ -73,10 +50,9 @@ test("launch args include proxy-server when proxy is enabled", () => {
   });
 
   assert.ok(args.includes("--proxy-server=http://127.0.0.1:8080"));
-  assert.ok(args.includes("--disable-spoofing=gpu,font"));
 });
 
-test("createFingerprintProfile resolves a macOS Apple M4 persona and proxy timezone", async () => {
+test("createFingerprintProfile resolves a Linux Ubuntu persona and proxy timezone", async () => {
   const profile = await createFingerprintProfile(
     {
       BROWSER_EXECUTABLE_PATH:
@@ -86,6 +62,7 @@ test("createFingerprintProfile resolves a macOS Apple M4 persona and proxy timez
     },
     {
       randomInt: () => 424242,
+      readFileSync: () => 'VERSION="24.04.4 LTS (Noble Numbat)"\nVERSION_ID="24.04"\n',
       resolveProxyTimezone: async (config) => {
         assert.equal(config.PROXY, "http://127.0.0.1:7890");
         return "Asia/Hong_Kong";
@@ -94,31 +71,39 @@ test("createFingerprintProfile resolves a macOS Apple M4 persona and proxy timez
     }
   );
 
-  assert.equal(profile.platform, "macos");
+  assert.equal(profile.platform, "linux");
   assert.equal(profile.brand, "Chrome");
   assert.equal(profile.brandVersion, "144.0.7559.132");
-  assert.equal(profile.platformVersion, "15.2.0");
+  assert.equal(profile.platformVersion, "24.04.4");
   assert.equal(profile.seed, 424242);
   assert.equal(profile.timezone, "Asia/Hong_Kong");
-  assert.equal(profile.webgl.vendor, "Apple Inc.");
-  assert.equal(profile.webgl.renderer, "Apple M4");
+  assert.equal(profile.webgl.vendor, "Google Inc. (Mesa)");
+  assert.equal(profile.webgl.renderer, "ANGLE (Mesa, Vulkan 1.3)");
 });
 
-test("injection script only keeps the minimal automation patches", () => {
-  const profile = {
-    webgl: {
-      vendor: "Apple Inc.",
-      renderer: "Apple M4",
-    },
-  };
-  const script = buildInjectionScript(profile);
+test("injection script is disabled", () => {
+  assert.equal(buildInjectionScript({}), "");
+});
 
-  assert.match(script, /navigator, "webdriver"/);
-  assert.match(script, /window\.chrome/);
-  assert.match(script, /Apple M4/);
-  assert.match(script, /WebGLRenderingContext/);
-  assert.doesNotMatch(script, /Intl\.DateTimeFormat/);
-  assert.doesNotMatch(script, /MacIntel/);
+test("resolveSystemLinuxPlatformVersion reads Ubuntu version from os-release", () => {
+  assert.equal(
+    resolveSystemLinuxPlatformVersion(
+      () =>
+        'PRETTY_NAME="Ubuntu 24.04.4 LTS"\nVERSION="24.04.4 LTS (Noble Numbat)"\nVERSION_ID="24.04"\n'
+    ),
+    "24.04.4"
+  );
+});
+
+test("resolveRandomScreen picks a common desktop window size", () => {
+  assert.deepEqual(resolveRandomScreen(() => 0), {
+    width: 1366,
+    height: 768,
+  });
+  assert.deepEqual(resolveRandomScreen(() => 7), {
+    width: 1920,
+    height: 1080,
+  });
 });
 
 test("normalizeCurlProxyUrl upgrades socks proxies to socks5h for timezone lookups", () => {

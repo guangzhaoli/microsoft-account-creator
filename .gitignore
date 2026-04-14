@@ -3,3 +3,10 @@ node_modules
 accounts.txt
 package-lock.json
 .worktrees/
+.claude/
+.codex/
+config/.runtime/
+config/proxy_pool_residential.yaml
+oauth_tokens.jsonl
+oauth_tokens.txt
+tmp-*.png

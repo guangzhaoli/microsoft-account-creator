@@ -380,12 +380,18 @@ test("createAccount shows the browser for manual verification and hides it after
   );
 });
 
-test("createAccount handles accessible challenge before waiting for the captcha frame", async () => {
+test("createAccount directly solves press and hold with mouse input", async () => {
   const actions = [];
   const state = {
-    accessibleClicked: false,
-    pleaseWaitPollsRemaining: 1,
+    holdStarted: false,
+    pleaseWaitPollsRemaining: 2,
     challengeComplete: false,
+  };
+
+  const holdHandle = {
+    async boundingBox() {
+      return { x: 20, y: 30, width: 40, height: 50 };
+    },
   };
 
   const challengeFrame = {
@@ -402,20 +408,14 @@ test("createAccount handles accessible challenge before waiting for the captcha 
         };
       }
 
-      if (state.accessibleClicked && state.pleaseWaitPollsRemaining > 0) {
+      if (state.holdStarted && state.pleaseWaitPollsRemaining > 0) {
         state.pleaseWaitPollsRemaining -= 1;
+        if (state.pleaseWaitPollsRemaining === 0) {
+          state.challengeComplete = true;
+        }
         return {
           title: "human verification challenge",
           bodyText: "please wait",
-          hasAccessibleChallenge: true,
-          hasPressAndHoldButton: true,
-        };
-      }
-
-      if (state.accessibleClicked) {
-        return {
-          title: "human verification challenge",
-          bodyText: "press again",
           hasAccessibleChallenge: false,
           hasPressAndHoldButton: false,
         };
@@ -423,53 +423,35 @@ test("createAccount handles accessible challenge before waiting for the captcha 
 
       return {
         title: "human verification challenge",
-        bodyText:
-          "human challenge requires verification. please press the button once, wait for confirmation, and press again when prompted press and hold",
-        hasAccessibleChallenge: true,
+        bodyText: "press and hold the button",
+        hasAccessibleChallenge: false,
         hasPressAndHoldButton: true,
       };
     },
-    async $x(selector) {
-      actions.push(["frame.$x", selector]);
-
-      if (
-        selector.toLowerCase().includes("accessible challenge") &&
-        !state.accessibleClicked
-      ) {
-        return [
-          {
-            async click() {
-              actions.push(["handle.click", "accessible"]);
-              state.accessibleClicked = true;
-            },
-          },
-        ];
+    async $(selector) {
+      actions.push(["frame.$", selector]);
+      if (selector === '[aria-label="Press & Hold Human Challenge"]') {
+        return holdHandle;
       }
-
-      if (
-        selector.toLowerCase().includes("press again") &&
-        state.accessibleClicked &&
-        state.pleaseWaitPollsRemaining === 0 &&
-        !state.challengeComplete
-      ) {
-        return [
-          {
-            async click() {
-              actions.push(["handle.click", "press again"]);
-              state.challengeComplete = true;
-            },
-          },
-        ];
-      }
-
+      return null;
+    },
+    async $x() {
       return [];
     },
   };
 
   const page = {
-    keyboard: {
-      async press(key) {
-        actions.push(["press", key]);
+    keyboard: { async press() {} },
+    mouse: {
+      async move(x, y) {
+        actions.push(["page.mouse.move", x, y]);
+      },
+      async down() {
+        actions.push(["page.mouse.down"]);
+        state.holdStarted = true;
+      },
+      async up() {
+        actions.push(["page.mouse.up"]);
       },
     },
     async goto(url) {
@@ -554,85 +536,26 @@ test("createAccount handles accessible challenge before waiting for the captcha 
     }
   );
 
-  const relevantActions = actions.filter(
-    (entry) =>
-      entry[0] === "handle.click" ||
-      (entry[0] === "frame.$x" &&
-        (entry[1].toLowerCase().includes("accessible challenge") ||
-          entry[1].toLowerCase().includes("press again")))
-  );
-
-  assert.equal(
-    relevantActions.some(
-      (entry) =>
-        entry[0] === "frame.$x" &&
-        entry[1].toLowerCase().includes("accessible challenge")
-    ),
-    true
-  );
-  assert.equal(
-    relevantActions.some(
-      (entry) =>
-        entry[0] === "frame.$x" &&
-        entry[1].toLowerCase().includes("press again")
-    ),
-    true
-  );
   assert.deepEqual(
-    relevantActions.filter((entry) => entry[0] === "handle.click"),
+    actions.filter((entry) => entry[0].startsWith("page.mouse")),
     [
-      ["handle.click", "accessible"],
-      ["handle.click", "press again"],
+      ["page.mouse.move", 40, 55],
+      ["page.mouse.down"],
+      ["page.mouse.up"],
     ]
   );
 });
 
-test("createAccount falls back to keyboard activation when challenge click does not advance", async () => {
+test("createAccount uses mouse hold only and never falls back to accessible challenge or press again", async () => {
   const actions = [];
   const state = {
-    accessibleActivated: false,
-    pressAgainShown: false,
+    holdStarted: false,
     challengeComplete: false,
   };
 
-  const accessibleHandle = {
-    async click() {
-      actions.push(["handle.click", "accessible"]);
-    },
-    async focus() {
-      actions.push(["handle.focus", "accessible"]);
-    },
-    async press(key) {
-      actions.push(["handle.press", key]);
-      if (key === "Enter") {
-        state.accessibleActivated = true;
-        state.pressAgainShown = true;
-      }
-    },
-    async hover() {
-      actions.push(["handle.hover", "accessible"]);
-    },
+  const holdHandle = {
     async boundingBox() {
       return { x: 10, y: 20, width: 30, height: 40 };
-    },
-  };
-
-  const pressAgainHandle = {
-    async click() {
-      actions.push(["handle.click", "press again"]);
-      state.challengeComplete = true;
-    },
-    async focus() {
-      actions.push(["handle.focus", "press again"]);
-    },
-    async press(key) {
-      actions.push(["handle.press", `press-again:${key}`]);
-    },
-    async hover() {
-      actions.push(["handle.hover", "press again"]);
-    },
-    async boundingBox() {
-      return { x: 50, y: 60, width: 70, height: 80 };
     },
   };
 
@@ -650,41 +573,26 @@ test("createAccount falls back to keyboard activation when challenge click does 
         };
       }
 
-      if (state.pressAgainShown) {
-        return {
-          title: "human verification challenge",
-          bodyText: "press again",
-          hasAccessibleChallenge: false,
-          hasPressAndHoldButton: false,
-        };
+      if (state.holdStarted) {
+        state.challengeComplete = true;
       }
 
       return {
         title: "human verification challenge",
-        bodyText:
-          "human challenge requires verification. please press the button once, wait for confirmation, and press again when prompted press and hold",
-        hasAccessibleChallenge: true,
+        bodyText: "press and hold the button",
+        hasAccessibleChallenge: false,
         hasPressAndHoldButton: true,
       };
     },
+    async $(selector) {
+      actions.push(["frame.$", selector]);
+      if (selector === '[aria-label="Press & Hold Human Challenge"]') {
+        return holdHandle;
+      }
+      return null;
+    },
     async $x(selector) {
       actions.push(["frame.$x", selector]);
-
-      if (
-        selector.toLowerCase().includes("accessible challenge") &&
-        !state.accessibleActivated
-      ) {
-        return [accessibleHandle];
-      }
-
-      if (
-        selector.toLowerCase().includes("press again") &&
-        state.pressAgainShown &&
-        !state.challengeComplete
-      ) {
-        return [pressAgainHandle];
-      }
-
       return [];
     },
   };
@@ -696,8 +604,15 @@ test("createAccount falls back to keyboard activation when challenge click does 
       },
     },
     mouse: {
-      async click(x, y) {
-        actions.push(["page.mouse.click", x, y]);
+      async move(x, y) {
+        actions.push(["page.mouse.move", x, y]);
+      },
+      async down() {
+        actions.push(["page.mouse.down"]);
+        state.holdStarted = true;
+      },
+      async up() {
+        actions.push(["page.mouse.up"]);
       },
     },
     async goto() {},
@@ -769,67 +684,30 @@ test("createAccount falls back to keyboard activation when challenge click does 
     }
   );
 
+  assert.equal(actions.some((entry) => entry[0] === "page.mouse.down"), true);
+  assert.equal(actions.some((entry) => entry[0] === "page.mouse.up"), true);
   assert.equal(
     actions.some(
-      (entry) => entry[0] === "handle.press" && entry[1] === "Enter"
+      (entry) =>
+        entry[0] === "frame.$x" &&
+        (entry[1].toLowerCase().includes("accessible challenge") ||
+          entry[1].toLowerCase().includes("press again"))
     ),
-    true
-  );
-  assert.deepEqual(
-    actions.filter((entry) => entry[0] === "handle.click"),
-    [
-      ["handle.click", "accessible"],
-      ["handle.click", "press again"],
-    ]
+    false
   );
 });
 
-test("createAccount waits through the completed please-wait state after press again", async () => {
+test("createAccount waits through the completed please-wait state after mouse hold", async () => {
   const actions = [];
   const state = {
-    accessibleActivated: false,
-    pressAgainShown: false,
+    holdStarted: false,
     completedPendingPolls: 2,
     challengeComplete: false,
   };
 
-  const accessibleHandle = {
-    async click() {
-      actions.push(["handle.click", "accessible"]);
-      state.accessibleActivated = true;
-      state.pressAgainShown = true;
-    },
-    async focus() {
-      actions.push(["handle.focus", "accessible"]);
-    },
-    async press(key) {
-      actions.push(["handle.press", key]);
-    },
-    async hover() {
-      actions.push(["handle.hover", "accessible"]);
-    },
+  const holdHandle = {
     async boundingBox() {
       return { x: 10, y: 20, width: 30, height: 40 };
-    },
-  };
-
-  const pressAgainHandle = {
-    async click() {
-      actions.push(["handle.click", "press again"]);
-      state.pressAgainShown = false;
-      state.completedPendingPolls = 2;
-    },
-    async focus() {
-      actions.push(["handle.focus", "press again"]);
-    },
-    async press(key) {
-      actions.push(["handle.press", `press-again:${key}`]);
-    },
-    async hover() {
-      actions.push(["handle.hover", "press again"]);
-    },
-    async boundingBox() {
-      return { x: 50, y: 60, width: 70, height: 80 };
     },
   };
 
@@ -848,43 +726,34 @@ test("createAccount waits through the completed please-wait state after press ag
       }
 
       if (state.completedPendingPolls > 0) {
-        state.completedPendingPolls -= 1;
-        if (state.completedPendingPolls === 0) {
-          state.challengeComplete = true;
+        if (state.holdStarted) {
+          state.completedPendingPolls -= 1;
+          if (state.completedPendingPolls === 0) {
+            state.challengeComplete = true;
+          }
         }
         return {
           title: "human verification challenge",
-          bodyText: "human challenge completed, please wait",
-          hasAccessibleChallenge: true,
-          hasPressAndHoldButton: true,
-        };
-      }
-
-      if (state.pressAgainShown) {
-        return {
-          title: "human verification challenge",
-          bodyText: "press again",
+          bodyText: state.holdStarted
+            ? "human challenge completed, please wait"
+            : "press and hold the button",
           hasAccessibleChallenge: false,
-          hasPressAndHoldButton: false,
+          hasPressAndHoldButton: !state.holdStarted,
         };
       }
 
       return {
         title: "human verification challenge",
-        bodyText: "accessible challenge",
-        hasAccessibleChallenge: true,
-        hasPressAndHoldButton: false,
+        bodyText: "press and hold the button",
+        hasAccessibleChallenge: false,
+        hasPressAndHoldButton: true,
       };
     },
     async $(selector) {
       actions.push(["frame.$", selector]);
 
-      if (selector === '[aria-label="Accessible challenge"]' && !state.accessibleActivated) {
-        return accessibleHandle;
-      }
-
-      if (selector === '[aria-label="Press again"]' && state.pressAgainShown) {
-        return pressAgainHandle;
+      if (selector === '[aria-label="Press & Hold Human Challenge"]') {
+        return holdHandle;
       }
 
       return null;
@@ -899,12 +768,6 @@ test("createAccount waits through the completed please-wait state after press ag
       async press(key) {
         actions.push(["page.keyboard.press", key]);
       },
-      async down(key) {
-        actions.push(["page.keyboard.down", key]);
-      },
-      async up(key) {
-        actions.push(["page.keyboard.up", key]);
-      },
     },
     mouse: {
       async click(x, y) {
@@ -915,6 +778,7 @@ test("createAccount waits through the completed please-wait state after press ag
       },
       async down() {
         actions.push(["page.mouse.down"]);
+        state.holdStarted = true;
       },
       async up() {
         actions.push(["page.mouse.up"]);
@@ -995,8 +859,405 @@ test("createAccount waits through the completed please-wait state after press ag
   assert.equal(
     actions.some(
       (entry) =>
-        entry[0] === "page.keyboard.down" || entry[0] === "page.keyboard.up"
+        entry[0] === "frame.$" &&
+        (entry[1] === '[aria-label="Accessible challenge"]' ||
+          entry[1] === '[aria-label="Press again"]')
     ),
     false
+  );
+});
+
+test("createAccount ignores hidden press-and-hold containers and holds the visible button", async () => {
+  const actions = [];
+  const state = {
+    holdStarted: false,
+    challengeComplete: false,
+  };
+  let lastMove = null;
+
+  const hiddenHoldHandle = {
+    async boundingBox() {
+      return null;
+    },
+    async evaluate(fn) {
+      return fn({
+        getBoundingClientRect() {
+          return { left: 0, top: 0, width: 0, height: 0 };
+        },
+      });
+    },
+  };
+
+  const visibleHoldHandle = {
+    async boundingBox() {
+      return { x: 100, y: 120, width: 50, height: 40 };
+    },
+  };
+
+  const hiddenFrame = {
+    url() {
+      return "about:blank";
+    },
+    async evaluate() {
+      if (state.challengeComplete) {
+        return {
+          title: "",
+          bodyText: "",
+          hasPressAndHoldButton: false,
+        };
+      }
+
+      return {
+        title: "human verification challenge",
+        bodyText:
+          "human challenge requires verification. please press and hold the button once",
+        hasPressAndHoldButton: true,
+      };
+    },
+    async $(selector) {
+      actions.push(["hiddenFrame.$", selector]);
+      if (selector === '[aria-label="Press & Hold Human Challenge"]') {
+        return hiddenHoldHandle;
+      }
+      return null;
+    },
+    async evaluateHandle() {
+      return {
+        asElement() {
+          return null;
+        },
+        async dispose() {},
+      };
+    },
+    async $x() {
+      return [];
+    },
+  };
+
+  const visibleFrame = {
+    url() {
+      return "about:blank";
+    },
+    async evaluate() {
+      if (state.challengeComplete) {
+        return {
+          title: "",
+          bodyText: "",
+          hasPressAndHoldButton: false,
+        };
+      }
+
+      if (state.holdStarted) {
+        state.challengeComplete = true;
+        return {
+          title: "human verification challenge",
+          bodyText: "please wait",
+          hasPressAndHoldButton: false,
+        };
+      }
+
+      return {
+        title: "human verification challenge",
+        bodyText: "press and hold •••",
+        hasPressAndHoldButton: false,
+      };
+    },
+    async $(selector) {
+      actions.push(["visibleFrame.$", selector]);
+      return null;
+    },
+    async evaluateHandle() {
+      return {
+        asElement() {
+          return visibleHoldHandle;
+        },
+      };
+    },
+    async $x() {
+      return [];
+    },
+  };
+
+  const page = {
+    keyboard: { async press() {} },
+    mouse: {
+      async move(x, y) {
+        lastMove = { x, y };
+        actions.push(["page.mouse.move", x, y]);
+      },
+      async down() {
+        actions.push(["page.mouse.down"]);
+        if (lastMove && lastMove.x === 125 && lastMove.y === 140) {
+          state.holdStarted = true;
+        }
+      },
+      async up() {
+        actions.push(["page.mouse.up"]);
+      },
+    },
+    async goto() {},
+    async waitForSelector(selector) {
+      const allowed = new Set([
+        "#floatingLabelInput4",
+        'input[type=\"password\"]',
+        "#floatingLabelInput24",
+        "#firstNameInput",
+        "#lastNameInput",
+        "#declineButton",
+        "#mainApp",
+      ]);
+
+      if (selector === "#usernameInput") {
+        throw new Error("legacy selector missing");
+      }
+
+      if (!allowed.has(selector)) {
+        throw new Error(`unexpected selector ${selector}`);
+      }
+    },
+    async type() {},
+    async focus() {},
+    async $eval() {
+      return "unused@example.com";
+    },
+    async evaluate() {
+      return state.challengeComplete
+        ? { title: "", bodyText: "" }
+        : {
+            title: "let's prove you're human",
+            bodyText: "press and hold the button",
+          };
+    },
+    async click() {},
+    async $() {
+      return null;
+    },
+    frames() {
+      return [hiddenFrame, visibleFrame];
+    },
+    url() {
+      return "https://signup.live.com/signup";
+    },
+  };
+
+  await createAccount(
+    page,
+    {
+      ADD_RECOVERY_EMAIL: false,
+      ACCOUNTS_FILE: "/tmp/accounts.txt",
+      NAMES_FILE: "src/Utils/names.txt",
+      WORDS_FILE: "src/Utils/words5char.txt",
+    },
+    {
+      logFn: () => {},
+      delayFn: async () => {},
+      generatePersonalInfoFn: async () => ({
+        username: "testuser123",
+        randomFirstName: "Mario",
+        randomLastName: "Rossi",
+        birthDay: "1",
+        birthMonth: "1",
+        birthYear: "1995",
+      }),
+      generatePasswordFn: async () => "secret123!",
+      writeCredentialsFn: async () => {},
+    }
+  );
+
+  assert.equal(state.holdStarted, true);
+  assert.deepEqual(
+    actions.filter((entry) => entry[0] === "page.mouse.move"),
+    [["page.mouse.move", 125, 140]]
+  );
+});
+
+test("createAccount ignores main-page press-and-hold text and targets the challenge subframe button", async () => {
+  const actions = [];
+  const state = {
+    holdStarted: false,
+    challengeComplete: false,
+  };
+  let lastMove = null;
+
+  const mainPageFalseTargetHandle = {
+    async boundingBox() {
+      return { x: 300, y: 280, width: 200, height: 40 };
+    },
+  };
+
+  const visibleHoldHandle = {
+    async boundingBox() {
+      return { x: 100, y: 120, width: 50, height: 40 };
+    },
+  };
+
+  const mainFrame = {
+    url() {
+      return "https://signup.live.com/signup";
+    },
+    async evaluate() {
+      return {
+        title: "let's prove you're human",
+        bodyText:
+          "main page wrapper text press and hold the button help and feedback",
+        hasPressAndHoldButton: false,
+      };
+    },
+    async $(selector) {
+      actions.push(["mainFrame.$", selector]);
+      return null;
+    },
+    async evaluateHandle() {
+      return {
+        asElement() {
+          return mainPageFalseTargetHandle;
+        },
+      };
+    },
+    async $x() {
+      return [];
+    },
+  };
+
+  const challengeFrame = {
+    url() {
+      return "about:blank";
+    },
+    async evaluate() {
+      if (state.challengeComplete) {
+        return {
+          title: "",
+          bodyText: "",
+          hasPressAndHoldButton: false,
+        };
+      }
+
+      if (state.holdStarted) {
+        state.challengeComplete = true;
+        return {
+          title: "human verification challenge",
+          bodyText: "please wait",
+          hasPressAndHoldButton: false,
+        };
+      }
+
+      return {
+        title: "human verification challenge",
+        bodyText:
+          "human challenge requires verification. please press and hold the button until verified",
+        hasPressAndHoldButton: true,
+      };
+    },
+    async $(selector) {
+      actions.push(["challengeFrame.$", selector]);
+      if (selector === '[aria-label="Press & Hold Human Challenge"]') {
+        return visibleHoldHandle;
+      }
+      return null;
+    },
+    async evaluateHandle() {
+      return {
+        asElement() {
+          return null;
+        },
+        async dispose() {},
+      };
+    },
+    async $x() {
+      return [];
+    },
+  };
+
+  const page = {
+    keyboard: { async press() {} },
+    mouse: {
+      async move(x, y) {
+        lastMove = { x, y };
+        actions.push(["page.mouse.move", x, y]);
+      },
+      async down() {
+        actions.push(["page.mouse.down"]);
+        if (lastMove && lastMove.x === 125 && lastMove.y === 140) {
+          state.holdStarted = true;
+        }
+      },
+      async up() {
+        actions.push(["page.mouse.up"]);
+      },
+    },
+    async goto() {},
+    async waitForSelector(selector) {
+      const allowed = new Set([
+        "#floatingLabelInput4",
+        'input[type=\"password\"]',
+        "#floatingLabelInput24",
+        "#firstNameInput",
+        "#lastNameInput",
+        "#declineButton",
+        "#mainApp",
+      ]);
+
+      if (selector === "#usernameInput") {
+        throw new Error("legacy selector missing");
+      }
+
+      if (!allowed.has(selector)) {
+        throw new Error(`unexpected selector ${selector}`);
+      }
+    },
+    async type() {},
+    async focus() {},
+    async $eval() {
+      return "unused@example.com";
+    },
+    async evaluate() {
+      return state.challengeComplete
+        ? { title: "", bodyText: "" }
+        : {
+            title: "let's prove you're human",
+            bodyText: "press and hold the button",
+          };
+    },
+    async click() {},
+    async $() {
+      return null;
+    },
+    frames() {
+      return [mainFrame, challengeFrame];
+    },
+    url() {
+      return "https://signup.live.com/signup";
+    },
+  };
+
+  await createAccount(
+    page,
+    {
+      ADD_RECOVERY_EMAIL: false,
+      ACCOUNTS_FILE: "/tmp/accounts.txt",
+      NAMES_FILE: "src/Utils/names.txt",
+      WORDS_FILE: "src/Utils/words5char.txt",
+      MANUAL_VERIFICATION: false,
+    },
+    {
+      logFn: () => {},
+      delayFn: async () => {},
+      generatePersonalInfoFn: async () => ({
+        username: "testuser123",
+        randomFirstName: "Mario",
+        randomLastName: "Rossi",
+        birthDay: "1",
+        birthMonth: "1",
+        birthYear: "1995",
+      }),
+      generatePasswordFn: async () => "secret123!",
+      writeCredentialsFn: async () => {},
+    }
+  );
+
+  assert.equal(state.holdStarted, true);
+  assert.deepEqual(
+    actions.filter((entry) => entry[0] === "page.mouse.move"),
+    [["page.mouse.move", 125, 140]]
   );
 });

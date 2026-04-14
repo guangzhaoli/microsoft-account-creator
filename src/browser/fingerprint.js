@@ -8,15 +8,22 @@ const {
   getProxyCredentials,
 } = require("./runtime-config");
 
-const DEFAULT_SCREEN = {
-  width: 1512,
-  height: 982,
-};
+const COMMON_SCREEN_SIZES = [
+  { width: 1366, height: 768 },
+  { width: 1440, height: 900 },
+  { width: 1536, height: 864 },
+  { width: 1600, height: 900 },
+  { width: 1680, height: 1050 },
+  { width: 1728, height: 1117 },
+  { width: 1792, height: 1120 },
+  { width: 1920, height: 1080 },
+];
 const DEFAULT_LOOKUP_URL = "https://ipwho.is/";
 const proxyTimezoneCache = new Map();
 
 async function createFingerprintProfile(config = {}, deps = {}) {
   const randomInt = deps.randomInt || crypto.randomInt;
+  const readFileSync = deps.readFileSync || fs.readFileSync;
   const availableParallelism =
     deps.availableParallelism ||
     (typeof os.availableParallelism === "function"
@@ -33,7 +40,7 @@ async function createFingerprintProfile(config = {}, deps = {}) {
   return {
     seed: resolveFingerprintSeed(config, randomInt),
     platform: resolveFingerprintPlatform(config),
-    platformVersion: resolveFingerprintPlatformVersion(config),
+    platformVersion: resolveFingerprintPlatformVersion(config, readFileSync),
     brand: resolveFingerprintBrand(config),
     brandVersion: resolveBrowserVersion(config.BROWSER_EXECUTABLE_PATH, execFileSync),
     language: resolveFingerprintLanguage(config),
@@ -48,7 +55,7 @@ async function createFingerprintProfile(config = {}, deps = {}) {
     ),
     disableNonProxiedUDP: true,
     disableSpoofing: normalizeDisableSpoofing(config.FINGERPRINT_DISABLE_SPOOFING),
-    screen: { ...DEFAULT_SCREEN },
+    screen: resolveRandomScreen(randomInt),
     webgl: {
       vendor: resolveFingerprintWebGLVendor(config),
       renderer: resolveFingerprintWebGLRenderer(config),
@@ -72,10 +79,10 @@ function resolveFingerprintPlatform(config) {
     return config.FINGERPRINT_PLATFORM.trim();
   }
 
-  return "macos";
+  return "linux";
 }
 
-function resolveFingerprintPlatformVersion(config) {
+function resolveFingerprintPlatformVersion(config, readFileSync) {
   if (
     typeof config?.FINGERPRINT_PLATFORM_VERSION === "string" &&
     config.FINGERPRINT_PLATFORM_VERSION.trim() !== ""
@@ -83,7 +90,7 @@ function resolveFingerprintPlatformVersion(config) {
     return config.FINGERPRINT_PLATFORM_VERSION.trim();
   }
 
-  return "15.2.0";
+  return resolveSystemLinuxPlatformVersion(readFileSync);
 }
 
 function resolveFingerprintBrand(config) {
@@ -127,7 +134,7 @@ function resolveFingerprintWebGLVendor(config) {
     return config.FINGERPRINT_WEBGL_VENDOR.trim();
   }
 
-  return "Apple Inc.";
+  return "Google Inc. (Mesa)";
 }
 
 function resolveFingerprintWebGLRenderer(config) {
@@ -138,7 +145,24 @@ function resolveFingerprintWebGLRenderer(config) {
     return config.FINGERPRINT_WEBGL_RENDERER.trim();
   }
 
-  return "Apple M4";
+  return "ANGLE (Mesa, Vulkan 1.3)";
+}
+
+function resolveSystemLinuxPlatformVersion(readFileSync) {
+  try {
+    const osRelease = String(readFileSync("/etc/os-release", "utf8"));
+    const versionMatch = osRelease.match(/^VERSION="?([0-9]+(?:\.[0-9]+)+)/m);
+    if (versionMatch) {
+      return versionMatch[1];
+    }
+
+    const versionIdMatch = osRelease.match(/^VERSION_ID="?([0-9]+(?:\.[0-9]+)*)"?$/m);
+    if (versionIdMatch) {
+      return versionIdMatch[1];
+    }
+  } catch (error) {}
+
+  return "";
 }
 
 async function resolveFingerprintTimezone(config, deps = {}) {
@@ -199,6 +223,11 @@ function normalizeDisableSpoofing(value) {
   return value
     .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
     .filter(Boolean);
+}
+
+function resolveRandomScreen(randomInt) {
+  const index = randomInt(0, COMMON_SCREEN_SIZES.length);
+  return { ...COMMON_SCREEN_SIZES[index] };
 }
 
 async function resolveProxyTimezone(config, deps = {}) {
@@ -280,26 +309,8 @@ function buildLaunchArgs(profile, config) {
     "--use-mock-keychain",
     `--lang=${profile.language}`,
     `--accept-lang=${profile.acceptLanguage}`,
-    `--timezone=${profile.timezone}`,
     `--window-size=${profile.screen.width},${profile.screen.height}`,
-    `--fingerprint=${profile.seed}`,
-    `--fingerprint-platform=${profile.platform}`,
-    `--fingerprint-brand=${profile.brand}`,
-    `--fingerprint-hardware-concurrency=${profile.hardwareConcurrency}`,
-    "--disable-non-proxied-udp",
   ];
-
-  if (profile.platformVersion) {
-    args.push(`--fingerprint-platform-version=${profile.platformVersion}`);
-  }
-
-  if (profile.brandVersion) {
-    args.push(`--fingerprint-brand-version=${profile.brandVersion}`);
-  }
-
-  if (profile.disableSpoofing.length > 0) {
-    args.push(`--disable-spoofing=${profile.disableSpoofing.join(",")}`);
-  }
 
   const proxyServer = buildProxyServerArg(config);
   if (proxyServer) {
@@ -310,47 +321,7 @@ function buildLaunchArgs(profile, config) {
 }
 
 function buildInjectionScript(profile = {}) {
-  const payload = JSON.stringify({
-    webglVendor: profile?.webgl?.vendor || "Apple Inc.",
-    webglRenderer: profile?.webgl?.renderer || "Apple M4",
-  });
-
-  return `(function() {
-    const profile = ${payload};
-    const defineGetter = (object, key, getter) => {
-      if (!object) {
-        return;
-      }
-      try {
-        Object.defineProperty(object, key, { get: getter, configurable: true });
-      } catch (error) {}
-    };
-
-    defineGetter(navigator, "webdriver", () => undefined);
-
-    window.chrome = window.chrome || {};
-    window.chrome.runtime = window.chrome.runtime || {};
-
-    const patchWebGL = (Ctor) => {
-      if (!Ctor || !Ctor.prototype || typeof Ctor.prototype.getParameter !== "function") {
-        return;
-      }
-
-      const originalGetParameter = Ctor.prototype.getParameter;
-      Ctor.prototype.getParameter = function(parameter) {
-        if (parameter === 37445) {
-          return profile.webglVendor;
-        }
-        if (parameter === 37446) {
-          return profile.webglRenderer;
-        }
-        return originalGetParameter.apply(this, arguments);
-      };
-    };
-
-    patchWebGL(window.WebGLRenderingContext);
-    patchWebGL(window.WebGL2RenderingContext);
-  })();`;
+  return "";
 }
 
 module.exports = {
@@ -359,4 +330,6 @@ module.exports = {
   buildInjectionScript,
   resolveProxyTimezone,
   normalizeCurlProxyUrl,
+  resolveSystemLinuxPlatformVersion,
+  resolveRandomScreen,
 };

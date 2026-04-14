@@ -23,9 +23,14 @@ test("windows-only packages are absent from all dependency sections", () => {
   }
 });
 
-test("chrome-remote-interface remains a required dependency", () => {
+test("puppeteer remains a direct dependency", () => {
   assert.ok(
-    packageJson.dependencies?.["chrome-remote-interface"],
-    "chrome-remote-interface must remain in dependencies"
+    packageJson.dependencies?.puppeteer,
+    "puppeteer must remain in dependencies"
+  );
+  assert.doesNotMatch(
+    packageJson.dependencies.puppeteer,
+    /^npm:rebrowser-puppeteer@/,
+    "puppeteer dependency must not alias rebrowser-puppeteer"
   );
 });

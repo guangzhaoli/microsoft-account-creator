@@ -1,5 +1,14 @@
 const axios = require('axios');
 
+function getRequiredRapidApiKey() {
+    const rapidApiKey = process.env.RAPIDAPI_KEY;
+    if (!rapidApiKey) {
+        throw new Error('Missing RAPIDAPI_KEY environment variable');
+    }
+
+    return rapidApiKey;
+}
+
 async function getKey() {
     try {
         const response = await axios.post("https://smailpro.com/app/key", {
@@ -61,10 +70,11 @@ async function getMid(email) {
     await delay(10000);
     try {
         const key = await getKey();
+        const rapidApiKey = getRequiredRapidApiKey();
         const response = await axios.get(`https://api.sonjj.com/email/gm/check`, {
             params: {
                 key: key,
-                'rapidapi-key': 'f871a22852mshc3ccc49e34af1e8p126682jsn734696f1f081',
+                'rapidapi-key': rapidApiKey,
                 email: email.email,
                 timestamp: email.timestamp
             },
@@ -89,10 +99,11 @@ async function getMessage(email) {
     try {
         const mid = await getMid(email);
         const key = await getKey();
+        const rapidApiKey = getRequiredRapidApiKey();
         const response = await axios.get(`https://api.sonjj.com/email/gm/read`, {
             params: {
                 key: key,
-                'rapidapi-key': 'f871a22852mshc3ccc49e34af1e8p126682jsn734696f1f081',
+                'rapidapi-key': rapidApiKey,
                 email: email.email,
                 message_id: mid
             },
